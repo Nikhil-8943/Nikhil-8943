@@ -1,0 +1,669 @@
+
+const express = require("express");
+const app = express();
+const cors = require("cors");
+const connectDB = require("./config/db");
+const productRoute = require("./routes/productRoutes");
+
+const path = require("path");
+const imageRoute = require("./routes/ImageRoutes");
+const fileuploadRoute = require("./routes/FileupoloadRoutes");
+const authRoutes = require('./routes/authRoutes');
+const courseRoutes = require('./routes/courseRoutes');
+const chapterRoutes = require('./routes/chapterRoutes');
+const topicRoutes = require('./routes/topicRoutes');
+const forumRoutes = require('./routes/forumRoutes');
+
+const port = 5555;
+
+
+app.use(cors({credentials:true,
+    origin: 'http://localhost:3000',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  }));
+
+app.use(express.urlencoded({ extended: true })); 
+
+
+app.use(express.static(path.join(__dirname, "public")));
+
+
+app.use(express.json());
+
+app.use('/uploads', express.static(path.join(__dirname, "public/uploads")));
+
+
+connectDB();
+
+
+app.use("/api/products/createuser", productRoute);
+app.use("/api/uploadimage", fileuploadRoute);
+app.use("/api/getImages", imageRoute);
+app.use('/api/auth', authRoutes);
+app.use('/api/courses', courseRoutes);
+app.use('/api/chapters', chapterRoutes);
+app.use('/api/topics', topicRoutes);
+app.use('/api/forums', forumRoutes);
+
+
+
+app.listen(port, () => console.log(`Server listening on port ${port}`)); 
+
+
+
+const mongoose = require("mongoose")
+
+const connectDB = async() => {
+    try {
+        mongoose.connect("mongodb://127.0.0.1:27017/productDB")
+        .then(() =>console.log("DB connected"))
+    } catch (error) {
+     console.log(error)   
+    }
+}
+
+module.exports = connectDB
+
+
+
+const asyncHandler = require('express-async-handler');
+const User = require('../models/User');
+const bcrypt = require('bcryptjs');
+const generateToken = require('../utils/generateToken');
+
+
+const registerUser = asyncHandler(async (req, res) => {
+  const { name, email, password, provider } = req.body;
+
+  
+  const userExists = await User.findOne({ email });
+
+  if (userExists) {
+    res.status(400);
+    throw new Error('User already exists');
+  }
+
+  
+  let hashedPassword = '';
+  if (provider === 'email') {
+    const salt = await bcrypt.genSalt(10);
+    hashedPassword = await bcrypt.hash(password, salt);
+  }
+
+  const user = await User.create({
+    name,
+    email,
+    password: hashedPassword,
+    provider: provider || 'email',
+  });
+
+  if (user) {
+    res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      provider: user.provider,
+      token: generateToken(user._id),
+    });
+  } else {
+    res.status(400);
+    throw new Error('Invalid user data');
+  }
+});
+
+
+const loginUser = asyncHandler(async (req, res) => {
+  const { email, password, provider } = req.body;
+
+  const user = await User.findOne({ email });
+
+  if (user && (provider !== 'email' || (await bcrypt.compare(password, user.password)))) {
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      provider: user.provider,
+      token: generateToken(user._id),
+    });
+  } else {
+    res.status(401);
+    throw new Error('Invalid email or password');
+  }
+});
+
+
+const logoutUser = asyncHandler(async (req, res) => {
+
+  res.json({ message: 'Logged out successfully' });
+});
+
+module.exports = { registerUser, loginUser, logoutUser };
+
+
+
+
+
+
+const asyncHandler = require('express-async-handler');
+const Chapter = require('../models/Chapter');
+const Course = require('../models/Course');
+
+
+const createChapter = asyncHandler(async (req, res) => {
+  const { title, description, courseId } = req.body;
+
+  if (!title || !courseId) {
+    res.status(400);
+    throw new Error('Title and Course ID are required');
+  }
+
+  const course = await Course.findById(courseId);
+  if (!course) {
+    res.status(404);
+    throw new Error('Course not found');
+  }
+
+  const chapterExists = await Chapter.findOne({ title, course: courseId });
+  if (chapterExists) {
+    res.status(400);
+    throw new Error('Chapter with this title already exists in the course');
+  }
+
+  const chapter = await Chapter.create({
+    title,
+    description,
+    course: courseId,
+  });
+
+  
+  course.chapters.push(chapter._id);
+  await course.save();
+
+  res.status(201).json(chapter);
+});
+
+
+const getChaptersByCourse = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+  const { page = 1, limit = 10 } = req.query;
+
+  const chapters = await Chapter.find({ course: courseId })
+    .populate('topics')
+    .limit(parseInt(limit))
+    .skip((parseInt(page) - 1) * parseInt(limit))
+    .sort({ createdAt: -1 });
+
+  const total = await Chapter.countDocuments({ course: courseId });
+
+  res.json({
+    chapters,
+    total,
+    page: parseInt(page),
+    pages: Math.ceil(total / limit),
+  });
+});
+
+
+const getChapterById = asyncHandler(async (req, res) => {
+  const chapter = await Chapter.findById(req.params.id).populate('topics');
+
+  if (!chapter) {
+    res.status(404);
+    throw new Error('Chapter not found');
+  }
+
+  res.json(chapter);
+});
+
+
+const updateChapter = asyncHandler(async (req, res) => {
+  const { title, description } = req.body;
+
+  const chapter = await Chapter.findById(req.params.id);
+
+  if (!chapter) {
+    res.status(404);
+    throw new Error('Chapter not found');
+  }
+
+  
+  if (title && title !== chapter.title) {
+    const chapterExists = await Chapter.findOne({ title, course: chapter.course });
+    if (chapterExists) {
+      res.status(400);
+      throw new Error('Another chapter with this title already exists in the course');
+    }
+    chapter.title = title;
+  }
+
+  if (description) {
+    chapter.description = description;
+  }
+
+  const updatedChapter = await chapter.save();
+  res.json(updatedChapter);
+});
+
+
+const deleteChapter = asyncHandler(async (req, res) => {
+  const chapter = await Chapter.findById(req.params.id);
+
+  if (!chapter) {
+    res.status(404);
+    throw new Error('Chapter not found');
+  }
+
+  
+  const course = await Course.findById(chapter.course);
+  if (course) {
+    course.chapters.pull(chapter._id);
+    await course.save();
+  }
+
+  
+  await Topic.deleteMany({ chapter: chapter._id });
+
+  await chapter.remove();
+  res.json({ message: 'Chapter removed' });
+});
+
+module.exports = {
+  createChapter,
+  getChaptersByCourse,
+  getChapterById,
+  updateChapter,
+  deleteChapter,
+};
+
+
+
+
+
+
+const asyncHandler = require('express-async-handler');
+const Course = require('../models/Course');
+
+
+const createCourse = asyncHandler(async (req, res) => {
+  const { title, description, duration, category } = req.body;
+
+  
+  const courseExists = await Course.findOne({ title });
+
+  if (courseExists) {
+    res.status(400);
+    throw new Error('Course already exists');
+  }
+
+  const course = await Course.create({
+    title,
+    description,
+    duration,
+    category,
+    createdBy: req.user._id,
+  });
+
+  res.status(201).json(course);
+});
+
+
+const getCourses = asyncHandler(async (req, res) => {
+  const pageSize = Number(req.query.limit) || 10;
+  const page = Number(req.query.page) || 1;
+
+  const count = await Course.countDocuments();
+  const courses = await Course.find()
+    .populate('createdBy', 'name email')
+    .limit(pageSize)
+    .skip(pageSize * (page - 1));
+
+  res.json({ courses, page, pages: Math.ceil(count / pageSize) });
+});
+
+
+const getCourseById = asyncHandler(async (req, res) => {
+  const course = await Course.findById(req.params.id).populate('chapters');
+
+  if (course) {
+    res.json(course);
+  } else {
+    res.status(404);
+    throw new Error('Course not found');
+  }
+});
+
+
+const updateCourse = asyncHandler(async (req, res) => {
+  const { title, description, duration, category } = req.body;
+
+  const course = await Course.findById(req.params.id);
+
+  if (course) {
+    course.title = title || course.title;
+    course.description = description || course.description;
+    course.duration = duration || course.duration;
+    course.category = category || course.category;
+
+    const updatedCourse = await course.save();
+    res.json(updatedCourse);
+  } else {
+    res.status(404);
+    throw new Error('Course not found');
+  }
+});
+
+
+const deleteCourse = asyncHandler(async (req, res) => {
+  const course = await Course.findById(req.params.id);
+
+  if (course) {
+    await course.remove();
+    res.json({ message: 'Course removed' });
+  } else {
+    res.status(404);
+    throw new Error('Course not found');
+  }
+});
+
+module.exports = {
+  createCourse,
+  getCourses,
+  getCourseById,
+  updateCourse,
+  deleteCourse,
+};
+
+
+
+
+
+
+const asyncHandler = require('express-async-handler');
+const Forum = require('../models/Forum');
+const Course = require('../models/Course');
+const Post = require('../models/Post');
+
+
+const createForumPost = asyncHandler(async (req, res) => {
+  const { title, content, courseId, attachments } = req.body;
+
+  if (!title || !content || !courseId) {
+    res.status(400);
+    throw new Error('Title, content, and Course ID are required');
+  }
+
+  const course = await Course.findById(courseId);
+  if (!course) {
+    res.status(404);
+    throw new Error('Course not found');
+  }
+
+  const post = await Post.create({
+    title,
+    content,
+    attachments,
+    course: courseId,
+    createdBy: req.user._id,
+  });
+
+  
+
+  res.status(201).json(post);
+});
+
+
+const getForumPostsByCourse = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+  const { page = 1, limit = 10 } = req.query;
+
+  const posts = await Post.find({ course: courseId })
+    .populate('createdBy', 'name email')
+    .populate({
+      path: 'comments',
+      populate: { path: 'createdBy', select: 'name email' },
+    })
+    .limit(parseInt(limit))
+    .skip((parseInt(page) - 1) * parseInt(limit))
+    .sort({ createdAt: -1 });
+
+  const total = await Post.countDocuments({ course: courseId });
+
+  res.json({
+    posts,
+    total,
+    page: parseInt(page),
+    pages: Math.ceil(total / limit),
+  });
+});
+
+
+const getForumPostById = asyncHandler(async (req, res) => {
+  const post = await Post.findById(req.params.id)
+    .populate('createdBy', 'name email')
+    .populate({
+      path: 'comments',
+      populate: { path: 'createdBy', select: 'name email' },
+    });
+
+  if (!post) {
+    res.status(404);
+    throw new Error('Post not found');
+  }
+
+  res.json(post);
+});
+
+
+const updateForumPost = asyncHandler(async (req, res) => {
+  const { title, content, attachments } = req.body;
+
+  const post = await Post.findById(req.params.id);
+
+  if (!post) {
+    res.status(404);
+    throw new Error('Post not found');
+  }
+
+  
+  if (post.createdBy.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error('Not authorized to update this post');
+  }
+
+  if (title) post.title = title;
+  if (content) post.content = content;
+  if (attachments) post.attachments = attachments;
+
+  const updatedPost = await post.save();
+  res.json(updatedPost);
+});
+
+
+const deleteForumPost = asyncHandler(async (req, res) => {
+  const post = await Post.findById(req.params.id);
+
+  if (!post) {
+    res.status(404);
+    throw new Error('Post not found');
+  }
+
+  
+  if (post.createdBy.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error('Not authorized to delete this post');
+  }
+
+  await post.remove();
+  res.json({ message: 'Post removed' });
+});
+
+
+const likePost = asyncHandler(async (req, res) => {
+  const post = await Post.findById(req.params.id);
+
+  if (!post) {
+    res.status(404);
+    throw new Error('Post not found');
+  }
+
+  if (post.likes.includes(req.user._id)) {
+    res.status(400);
+    throw new Error('Post already liked');
+  }
+
+  post.likes.push(req.user._id);
+  await post.save();
+
+  res.json({ likes: post.likes.length });
+});
+
+const unlikePost = asyncHandler(async (req, res) => {
+  const post = await Post.findById(req.params.id);
+
+  if (!post) {
+    res.status(404);
+    throw new Error('Post not found');
+  }
+
+  if (!post.likes.includes(req.user._id)) {
+    res.status(400);
+    throw new Error('Post has not been liked yet');
+  }
+
+  post.likes = post.likes.filter((userId) => userId.toString() !== req.user._id.toString());
+  await post.save();
+
+  res.json({ likes: post.likes.length });
+});
+
+module.exports = {
+  createForumPost,
+  getForumPostsByCourse,
+  getForumPostById,
+  updateForumPost,
+  deleteForumPost,
+  likePost,
+  unlikePost,
+};
+
+
+
+
+const asyncHandler = require('express-async-handler');
+const Topic = require('../models/Topic');
+const Chapter = require('../models/Chapter');
+
+
+const createTopic = asyncHandler(async (req, res) => {
+  const { title, description, content, attachments, chapterId } = req.body;
+
+  if (!title || !content || !chapterId) {
+    res.status(400);
+    throw new Error('Title, content, and Chapter ID are required');
+  }
+
+  const chapter = await Chapter.findById(chapterId);
+  if (!chapter) {
+    res.status(404);
+    throw new Error('Chapter not found');
+  }
+
+  const topicExists = await Topic.findOne({ title, chapter: chapterId });
+  if (topicExists) {
+    res.status(400);
+    throw new Error('Topic with this title already exists in the chapter');
+  }
+
+  const topic = await Topic.create({
+    title,
+    description,
+    content,
+    attachments,
+    chapter: chapterId,
+  });
+
+  
+  chapter.topics.push(topic._id);
+  await chapter.save();
+
+  res.status(201).json(topic);
+});
+
+
+const getTopicsByChapter = asyncHandler(async (req, res) => {
+  const { chapterId } = req.params;
+  const { page = 1, limit = 10 } = req.query;
+
+  const topics = await Topic.find({ chapter: chapterId })
+    .populate('chapter')
+    .limit(parseInt(limit))
+    .skip((parseInt(page) - 1) * parseInt(limit))
+    .sort({ createdAt: -1 });
+
+  const total = await Topic.countDocuments({ chapter: chapterId });
+
+  res.json({
+    topics,
+    total,
+    page: parseInt(page),
+    pages: Math.ceil(total / limit),
+  });
+});
+
+
+const getTopicById = asyncHandler(async (req, res) => {
+  const topic = await Topic.findById(req.params.id).populate('chapter');
+
+  if (!topic) {
+    res.status(404);
+    throw new Error('Topic not found');
+  }
+
+  res.json(topic);
+});
+
+
+const updateTopic = asyncHandler(async (req, res) => {
+  const { title, description, content, attachments } = req.body;
+
+  const topic = await Topic.findById(req.params.id);
+
+  if (!topic) {
+    res.status(404);
+    throw new Error('Topic not found');
+  }
+
+  
+  if (title && title !== topic.title) {
+    const topicExists = await Topic.findOne({ title, chapter: topic.chapter });
+    if (topicExists) {
+      res.status(400);
+      throw new Error('Another topic with this title already exists in the chapter');
+    }
+    topic.title = title;
+  }
+
+  if (description) {
+    topic.description = description;
+  }
+
+  if (content) {
+    topic.content = content;
+  }
+
+  if (attachments) {
+    topic.attachments = attachments;
+  }
+
+  const updatedTopic = await topic.save();
+  res.json(updatedTopic);
+});
+
+
+const deleteTopic = asyncHandler(async (req, res) => {
+  const topic = await Topic.findById(req.params.id);
+
+  if (!topic) {
+    res.status(404);
+    throw new Error('Topic not found');
+  }
