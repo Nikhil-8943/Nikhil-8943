@@ -1,0 +1,241 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+
+mongoose.connect('mongodb://localhost:27017/userDB', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+});
+
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true },
+    password: { type: String, required: true }
+});
+
+const User = mongoose.model('User', userSchema);
+
+
+app.post('/register', async (req, res) => {
+    const { username, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ username, password: hashedPassword });
+
+    try {
+        await user.save();
+        res.json({ message: 'User registered successfully' });
+    } catch (err) {
+        res.status(400).json({ message: 'Error registering user' });
+    }
+});
+
+
+app.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+    const user = await User.findOne({ username });
+    if (!user) {
+        return res.status(400).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+        return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign({ userId: user._id }, 'secretkey', { expiresIn: '1h' });
+    res.json({ token });
+});
+
+
+const nameSchema = new mongoose.Schema({
+    name: { type: String, required: true }
+});
+
+const Name = mongoose.model('Name', nameSchema);
+
+app.post('/addname', async (req, res) => {
+    const { name } = req.body;
+    const newName = new Name({ name });
+
+    try {
+        await newName.save();
+        res.json({ message: 'Name added successfully' });
+    } catch (err) {
+        res.status(400).json({ message: 'Error adding name' });
+    }
+});
+
+
+app.delete('/deletename/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await Name.findByIdAndDelete(id);
+        res.json({ message: 'Name deleted successfully' });
+    } catch (err) {
+        res.status(400).json({ message: 'Error deleting name' });
+    }
+});
+
+
+app.get('/searchname/:query', async (req, res) => {
+    const { query } = req.params;
+    try {
+        const names = await Name.find({ name: new RegExp(query, 'i') });
+        res.json(names);
+    } catch (err) {
+        res.status(400).json({ message: 'Error searching name' });
+    }
+});
+
+app.listen(5000, () => {
+    console.log('Server is running on port 5000');
+});
+
+
+
+
+import React, { useState } from 'react';
+import { login } from './api';
+
+const Login = () => {
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            const res = await login({ username, password });
+            localStorage.setItem('token', res.data.token);
+            alert('Login successful');
+        } catch (err) {
+            alert('Error logging in');
+        }
+    };
+
+    return (
+        <form onSubmit={handleSubmit}>
+            <h2>Login</h2>
+            <input
+                type="text"
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+            />
+            <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="submit">Login</button>
+        </form>
+    );
+};
+
+export default Login;
+
+
+
+
+import React, { useState } from 'react';
+import { addName, deleteName, searchName } from './api';
+
+const Dashboard = () => {
+    const [name, setName] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [names, setNames] = useState([]);
+
+    const handleAddName = async (e) => {
+        e.preventDefault();
+        try {
+            await addName({ name });
+            alert('Name added successfully');
+            setName('');
+        } catch (err) {
+            alert('Error adding name');
+        }
+    };
+
+    const handleSearch = async (e) => {
+        e.preventDefault();
+        try {
+            const res = await searchName(searchQuery);
+            setNames(res.data);
+        } catch (err) {
+            alert('Error searching names');
+        }
+    };
+
+    const handleDelete = async (id) => {
+        try {
+            await deleteName(id);
+            alert('Name deleted successfully');
+            setNames(names.filter((n) => n._id !== id));
+        } catch (err) {
+            alert('Error deleting name');
+        }
+    };
+
+    return (
+        <div>
+            <h2>Dashboard</h2>
+            <form onSubmit={handleAddName}>
+                <input
+                    type="text"
+                    placeholder="Add name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                />
+                <button type="submit">Add Name</button>
+            </form>
+
+            <form onSubmit={handleSearch}>
+                <input
+                    type="text"
+                    placeholder="Search name"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                <button type="submit">Search</button>
+            </form>
+
+            <ul>
+                {names.map((n) => (
+                    <li key={n._id}>
+                        {n.name}
+                        <button onClick={() => handleDelete(n._id)}>Delete</button>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+};
+
+export default Dashboard;
+
+
+
+import React from 'react';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import Login from './Login';
+import Dashboard from './Dashboard';
+
+const App = () => {
+    return (
+        <Router>
+            <Routes>
+                <Route path="/" element={<Login />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+            </Routes>
+        </Router>
+    );
+};
+
+export default App;
+
